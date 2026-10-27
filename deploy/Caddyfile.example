@@ -1,0 +1,12 @@
+# hub.example.com has a DNS A record that points to the Tailscale IP of this server (not proxied),
+# so it only answers inside your tailnet. The certificate comes from a DNS-01 challenge (see README).
+hub.example.com {
+	tls /etc/openbot-hub/tls/hub.crt /etc/openbot-hub/tls/hub.key
+
+	@outside not remote_ip 100.64.0.0/10 fd7a:115c:a1e0::/48
+	abort @outside
+
+	reverse_proxy unix//run/openbot-hub/hub.sock {
+		header_up X-Hub-Client-IP {remote_host}
+	}
+}

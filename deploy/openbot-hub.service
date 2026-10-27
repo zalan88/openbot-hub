@@ -1,0 +1,23 @@
+[Unit]
+Description=OpenBot Hub (installable web app for this OpenBot server)
+After=network-online.target
+
+[Service]
+# Run as a user that can read the data of the apps you turn on (for whatsapp_wacli: the wacli store).
+User=wa
+Group=wa
+SupplementaryGroups=caddy
+Environment=HUB_CONFIG=/etc/openbot-hub/config.json
+ExecStart=/usr/bin/python3 -I /opt/openbot-hub/hub/server.py
+RuntimeDirectory=openbot-hub
+RuntimeDirectoryMode=0755
+Restart=always
+RestartSec=5
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+MemoryMax=200M
+
+[Install]
+WantedBy=multi-user.target

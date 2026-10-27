@@ -1,0 +1,22 @@
+{
+  "name": "Hub",
+  "short_name": "Hub",
+  "listen": "unix:/run/openbot-hub/hub.sock",
+  "socket_group": "caddy",
+  "client_ip_header": "X-Hub-Client-IP",
+  "allow_cidrs": ["100.64.0.0/10", "fd7a:115c:a1e0::/48"],
+  "deny_ips": ["100.x.y.z (the Tailscale IP of this server, so local agents cannot get in)"],
+  "apps": {
+    "whatsapp_wacli": {
+      "title": "WhatsApp",
+      "description": "Allowlist, conversas e status",
+      "store_dir": "/srv/whatsapp/agent/store",
+      "wacli": "/usr/local/bin/wacli",
+      "timezone": "America/Sao_Paulo",
+      "owner_numbers": ["5511999999999"],
+      "units": ["wacli-sync.service"],
+      "gate_state_dir": null,
+      "gate_cmd": null
+    }
+  }
+}
