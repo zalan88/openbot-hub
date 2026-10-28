@@ -44,7 +44,19 @@ function home() {
   if (!HUB.apps.length) return view.replaceChildren(h("p", { class: "empty" }, "Nenhum app ligado na configuração."));
   view.replaceChildren(h("div", { class: "grid" }, HUB.apps.map((a) =>
     h("button", { class: "tile", onclick: () => (location.hash = "#/" + a.id) },
-      h("div", { class: "ico" }, ICONS[a.icon] || "▣"), h("b", {}, a.name), h("span", {}, a.description)))), pushCard());
+      h("div", { class: "ico" }, ICONS[a.icon] || "▣"), h("b", {}, a.name), h("span", {}, a.description)))), alertsCard(), pushCard());
+}
+function alertsCard() {
+  if (!HUB.push) return null;
+  const card = h("div", { class: "card", style: "margin-top:12px", hidden: true });
+  api("push/latest").then(({ items }) => {
+    if (!items || !items.length) return;
+    card.hidden = false;
+    card.replaceChildren(h("h2", {}, "Avisos"), ...items.slice().reverse().map((i) =>
+      h("div", { class: "row", style: "cursor:pointer", onclick: () => (location.href = i.url || "/") },
+        h("span", {}, h("b", {}, i.title), h("small", { style: "display:block;color:var(--muted)" }, i.body || "")))));
+  }).catch(() => {});
+  return card;
 }
 
 // ---------- notificações ----------

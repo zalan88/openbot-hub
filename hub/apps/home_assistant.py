@@ -126,8 +126,58 @@ class App:
             return 502, {"error": str(e)[:200]}
         return 200, (data, ctype if ctype.startswith("image/") else "image/jpeg")
 
+    def morning(self):
+        """Once a day, from `hour`: a summary of the night (19h–now) as a normal alert. No model calls."""
+        m = self.cfg.get("morning_summary")
+        if not m:
+            return []
+        lt = time.localtime()
+        day = time.strftime("%Y-%m-%d", lt)
+        if lt.tm_hour < m.get("hour", 7) or lt.tm_hour >= m.get("until", 11):
+            return []
+        cached = getattr(self, "_morning", None)
+        if cached and cached["day"] == day:
+            return [cached["alert"]]
+        night_h = lt.tm_hour + 5 + lt.tm_min / 60  # since 19h yesterday
+        ev = self.events(hours=int(night_h) + 1)["events"]
+        cutoff = time.time() - night_h * 3600
+        from datetime import datetime
+        ev = [e for e in ev if datetime.fromisoformat(e["ts"]).timestamp() >= cutoff]
+        lines = []
+        cry = sum(1 for e in ev if e["kind"] == "baby_cry")
+        people = {}
+        for e in ev:
+            if e["kind"] in ("person", "animal", "vehicle", "speaking"):
+                k = f"{e['label']} ({e['camera']})"
+                people[k] = people.get(k, 0) + 1
+        lines.append(f"Choro de bebê: {cry} vez(es)" if cry else "Sem choro detectado")
+        if people:
+            lines.append("Câmeras: " + ", ".join(f"{k} {v}x" for k, v in sorted(people.items(), key=lambda x: -x[1])[:4]))
+        te = m.get("temp_entity")
+        if te:
+            try:
+                start = time.strftime("%Y-%m-%dT%H:%M:%S%z", time.localtime(cutoff))
+                hist = self.req(f"/api/history/period/{urllib.parse.quote(start)}?filter_entity_id={te}&minimal_response", timeout=20)
+                vals = [float(x["state"]) for x in (hist[0] if hist else []) if x["state"] not in OFF]
+                if vals:
+                    lines.append(f"Quarto: {min(vals):.1f} a {max(vals):.1f} °C")
+            except (OSError, ValueError, IndexError):
+                pass
+        st = {s["entity_id"]: s for s in self.states()}
+        off = [st[e]["attributes"].get("friendly_name", e) for e in m.get("watch_entities", []) if e in st and st[e]["state"] in OFF]
+        if off:
+            lines.append("Sem sinal: " + ", ".join(off))
+        vac = st.get(m.get("vacuum", ""), {})
+        if vac:
+            lines.append("Robô: " + {"docked": "na base", "cleaning": "limpando", "error": "com erro",
+                                     "returning": "voltando"}.get(vac.get("state"), str(vac.get("state"))))
+        alert = {"id": f"resumo-{day}", "title": "☀️ Bom dia: como foi a noite", "body": " · ".join(lines),
+                 "url": "/#/home_assistant/eventos", "tag": "resumo-manha"}
+        self._morning = {"day": day, "alert": alert}
+        return [alert]
+
     def alerts(self):
-        out = []
+        out = list(self.morning())
         try:
             states = self.states()
         except (OSError, ValueError):

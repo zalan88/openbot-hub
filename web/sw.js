@@ -1,7 +1,7 @@
 // OpenBot Hub service worker: installable app shell + notifications.
 // Push messages carry no content: on a push, the worker fetches the alerts from the hub over the private
 // network. Data (/api/) always comes from the network; nothing private is cached.
-const SHELL = "hub-shell-v4";
+const SHELL = "hub-shell-v5";
 const FILES = ["/", "/style.css", "/app.js", "/icons/icon-192.png"];
 self.addEventListener("install", (e) => { e.waitUntil(caches.open(SHELL).then((c) => c.addAll(FILES))); self.skipWaiting(); });
 self.addEventListener("activate", (e) => e.waitUntil((async () => {
