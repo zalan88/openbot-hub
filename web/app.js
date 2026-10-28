@@ -33,7 +33,9 @@ function setTabs(items, active) {
     h("button", { class: id === active ? "on" : "", onclick: () => (location.hash = id) }, h("b", {}, ico), label)));
   tabs.hidden = !items.length;
 }
-const loading = () => view.replaceChildren(h("p", { class: "empty" }, "Carregando…"));
+let lastHash = null, soft = false;
+// Same screen refreshed (app back to front, ↻): keep what is on screen until the new data arrives.
+const loading = () => { if (!soft) view.replaceChildren(h("p", { class: "empty" }, "Carregando…")); };
 const fail = (e) => view.replaceChildren(h("p", { class: "empty" }, "Não deu para carregar: " + e.message));
 
 // ---------- início ----------
@@ -42,7 +44,77 @@ function home() {
   if (!HUB.apps.length) return view.replaceChildren(h("p", { class: "empty" }, "Nenhum app ligado na configuração."));
   view.replaceChildren(h("div", { class: "grid" }, HUB.apps.map((a) =>
     h("button", { class: "tile", onclick: () => (location.hash = "#/" + a.id) },
-      h("div", { class: "ico" }, ICONS[a.icon] || "▣"), h("b", {}, a.name), h("span", {}, a.description)))));
+      h("div", { class: "ico" }, ICONS[a.icon] || "▣"), h("b", {}, a.name), h("span", {}, a.description)))), pushCard());
+}
+
+// ---------- notificações ----------
+function pushCard() {
+  if (!HUB.push) return null;
+  const card = h("div", { class: "card", style: "margin-top:12px" });
+  const draw = async () => {
+    const ok = "serviceWorker" in navigator && "PushManager" in window && "Notification" in window;
+    if (!ok) return card.replaceChildren(h("h2", {}, "Notificações"), h("p", { class: "empty" }, "Este navegador não recebe notificações. No Android, use o Chrome com o app instalado."));
+    const reg = await navigator.serviceWorker.ready;
+    const sub = await reg.pushManager.getSubscription();
+    const on = sub && Notification.permission === "granted";
+    card.replaceChildren(h("h2", {}, "Notificações"),
+      h("div", { class: "row" }, h("span", { class: "k" }, "Neste aparelho"), on ? pill("ligadas", "ok") : pill("desligadas", "warn")),
+      h("div", { class: "row" }, h("span", { class: "k" }, "Aparelhos que recebem"), h("span", {}, HUB.push.devices)),
+      h("div", { class: "btns" }, on
+        ? [h("button", { class: "btn", onclick: async () => { await api("push/test", {}); toast("Enviado: deve chegar em segundos"); } }, "Testar"),
+           h("button", { class: "btn danger", onclick: async () => { await api("push/unsubscribe", { endpoint: sub.endpoint }); await sub.unsubscribe(); HUB.push.devices--; draw(); } }, "Desligar")]
+        : h("button", { class: "btn primary", onclick: () => enablePush().then(draw).catch((e) => toast(e.message)) }, "Ligar notificações")));
+  };
+  draw();
+  return card;
+}
+async function enablePush() {
+  if ((await Notification.requestPermission()) !== "granted") throw new Error("Permissão negada no navegador");
+  const reg = await navigator.serviceWorker.ready;
+  const key = Uint8Array.from(atob(HUB.push.key.replace(/-/g, "+").replace(/_/g, "/") + "==".slice(0, (4 - HUB.push.key.length % 4) % 4)), (c) => c.charCodeAt(0));
+  const sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: key });
+  const r = await api("push/subscribe", { subscription: sub.toJSON(), label: navigator.userAgent.slice(0, 60) });
+  HUB.push.devices = r.devices;
+  toast("Notificações ligadas");
+}
+
+// ---------- Casa ----------
+const HA = "home_assistant";
+let camTimer = null;
+async function haHome() {
+  setTop("Casa", true); setTabs([], ""); loading();
+  try {
+    const s = await api(`${HA}/status`);
+    if (!s.online) return view.replaceChildren(h("div", { class: "card" }, h("h2", {}, "Home Assistant"), pill("fora do ar", "bad"), h("p", { class: "empty" }, s.error || "")));
+    const on = s.cameras.filter((c) => c.online), offline = s.cameras.filter((c) => !c.online);
+    const grid = h("div", {}, h("div", { class: "cams" }, on.map((c) => h("button", { class: "cam", onclick: () => (location.hash = `#/${HA}/cam/${c.entity}`) },
+      h("img", { src: `/api/${HA}/snapshot?entity=${c.entity}&t=${Date.now()}`, alt: c.name, loading: "lazy" }), h("span", {}, c.name)))),
+      offline.length ? h("div", { class: "btns" }, h("span", { class: "k", style: "color:var(--muted);font-size:13px" }, "Offline:"), offline.map((c) => pill(c.name, "bad"))) : null);
+    const off = s.unavailable_by_domain.map(([d, n]) => h("div", { class: "row" }, h("span", { class: "k" }, d), h("span", {}, n)));
+    view.replaceChildren(h("div", { class: "card" }, h("h2", {}, `Câmeras (${s.cameras.filter((c) => c.online).length} de ${s.cameras.length} online)`), grid),
+      h("div", { class: "card" }, h("h2", {}, "Home Assistant"),
+        h("div", { class: "row" }, h("span", { class: "k" }, "Estado"), pill(`online · ${s.version}`, "ok")),
+        h("div", { class: "row" }, h("span", { class: "k" }, "Entidades"), h("span", {}, s.entities)),
+        h("div", { class: "row" }, h("span", { class: "k" }, "Indisponíveis"), s.unavailable ? pill(String(s.unavailable), "warn") : pill("0", "ok")), ...off));
+    clearInterval(camTimer);
+    camTimer = setInterval(() => document.querySelectorAll(".cams img").forEach((img) => { img.src = img.src.replace(/t=\d+/, "t=" + Date.now()); }), 10000);
+  } catch (e) { fail(e); }
+}
+function haCam(entity) {
+  setTop("Câmera", true); setTabs([], "");
+  const img = h("img", { class: "cam-live", alt: entity });
+  const stamp = h("small", { class: "empty" }, "");
+  let busy = false;
+  const tick = () => {
+    if (busy || document.visibilityState !== "visible") return;
+    busy = true;
+    const next = new Image();
+    next.onload = () => { img.src = next.src; stamp.textContent = new Date().toLocaleTimeString("pt-BR"); busy = false; };
+    next.onerror = () => { busy = false; };
+    next.src = `/api/${HA}/snapshot?entity=${entity}&t=${Date.now()}`;
+  };
+  view.replaceChildren(h("div", { class: "card" }, img, stamp));
+  tick(); clearInterval(camTimer); camTimer = setInterval(tick, 1500);
 }
 
 // ---------- WhatsApp ----------
@@ -123,7 +195,7 @@ async function waChat(num) {
     const bubbles = chat.messages.length ? chat.messages.map((m) => h("div", { class: "bubble " + m.who },
       m.text || (m.reaction ? m.reaction : m.media ? `[${m.media}]` : "…"), h("small", {}, m.when))) : [h("p", { class: "empty" }, "Sem mensagens guardadas.")];
     view.replaceChildren(info, h("div", { class: "card" }, legend, h("div", { class: "chat" }, bubbles)));
-    window.scrollTo(0, document.body.scrollHeight);
+    if (!soft) window.scrollTo(0, document.body.scrollHeight);
   } catch (e) { fail(e); }
 }
 
@@ -173,10 +245,14 @@ async function waUnknown() {
 
 // ---------- rotas ----------
 function route() {
+  soft = location.hash === lastHash && view.childElementCount > 0;
+  lastHash = location.hash;
   const [path, query] = (location.hash || "#/").slice(1).split("?");
   const p = path.split("/").filter(Boolean);
   const qs = new URLSearchParams(query || "");
+  if (!(p[0] === HA && p[1] === "cam")) clearInterval(camTimer);
   if (!p.length) return home();
+  if (p[0] === HA) return p[1] === "cam" ? haCam(p[2]) : haHome();
   if (p[0] === WA) {
     if (!p[1]) return waStatus();
     if (p[1] === "contacts") return waContacts();

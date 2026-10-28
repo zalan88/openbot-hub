@@ -6,7 +6,16 @@
   "client_ip_header": "X-Hub-Client-IP",
   "allow_cidrs": ["100.64.0.0/10", "fd7a:115c:a1e0::/48"],
   "deny_ips": ["100.x.y.z (the Tailscale IP of this server, so local agents cannot get in)"],
+  "state_dir": "/var/lib/openbot-hub",
+  "push_subject": "https://hub.example.com",
   "apps": {
+    "home_assistant": {
+      "title": "Casa",
+      "url": "http://homeassistant.local:8123",
+      "token_file": "/etc/openbot-hub/secrets/ha_token",
+      "hide_cameras": [],
+      "alert_cameras": []
+    },
     "whatsapp_wacli": {
       "title": "WhatsApp",
       "description": "Allowlist, conversas e status",

@@ -13,6 +13,7 @@ import mimetypes
 import os
 import socketserver
 import sys
+import time
 import urllib.parse
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -30,6 +31,9 @@ DEFAULTS = {
     "allow_cidrs": ["100.64.0.0/10", "fd7a:115c:a1e0::/48"],
     "deny_ips": [],
     "socket_group": "",
+    "state_dir": "/var/lib/openbot-hub",
+    "push_subject": "mailto:hub@example.com",
+    "alerts_every_s": 20,
     "apps": {},
 }
 
@@ -47,6 +51,12 @@ def load_config():
 CFG = load_config()
 ALLOW = [ipaddress.ip_network(c) for c in CFG["allow_cidrs"]]
 DENY = {ipaddress.ip_address(i) for i in CFG["deny_ips"]}
+PUSH = None
+try:
+    from hub.push import Push
+    PUSH = Push(os.path.join(CFG["state_dir"], "push"), CFG["push_subject"])
+except Exception as e:  # push is optional (needs the cryptography package)
+    sys.stderr.write(f"push off: {e!r}\n")
 APPS = {}
 for app_id, app_cfg in CFG["apps"].items():
     if app_cfg.get("enabled", True):
@@ -141,7 +151,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
     def api(self, method, path, query, body):
         parts = path.strip("/").split("/")[1:]
         if parts == ["apps"]:
-            return self.send(200, {"name": CFG["name"], "apps": [a.info for a in APPS.values()]})
+            return self.send(200, {"name": CFG["name"], "apps": [a.info for a in APPS.values()],
+                                   "push": {"key": PUSH.public_key, "devices": PUSH.count()} if PUSH else None})
+        if parts and parts[0] == "push":
+            return self.push_api(method, parts[1:], body)
         if not parts or parts[0] not in APPS:
             return self.send(404, {"error": "unknown app"})
         q = {k: v[0] for k, v in query.items()}
@@ -150,7 +163,29 @@ class Handler(http.server.BaseHTTPRequestHandler):
         except Exception as e:  # an app error must not take the hub down
             sys.stderr.write(f"app {parts[0]} error: {e!r}\n")
             status, payload = 500, {"error": "app error"}
+        if isinstance(payload, tuple):  # (bytes, content type), e.g. a camera image
+            return self.send(status, payload[0], payload[1])
         self.send(status, payload)
+
+    def push_api(self, method, parts, body):
+        if not PUSH:
+            return self.send(404, {"error": "push off"})
+        if method == "GET" and parts == ["latest"]:
+            return self.send(200, {"items": PUSH.latest()})
+        if method == "POST" and parts == ["subscribe"]:
+            try:
+                n = PUSH.subscribe((body or {}).get("subscription") or {}, (body or {}).get("label", ""))
+            except ValueError as e:
+                return self.send(400, {"error": str(e)})
+            return self.send(200, {"ok": True, "devices": n})
+        if method == "POST" and parts == ["unsubscribe"]:
+            PUSH.unsubscribe((body or {}).get("endpoint", ""))
+            return self.send(200, {"ok": True})
+        if method == "POST" and parts == ["test"]:
+            PUSH.publish([{"id": f"test-{int(time.time())}", "title": CFG["name"], "body": "Notificações ligadas.",
+                           "url": "/", "urgent": True}] + [i for i in PUSH.latest(30)])
+            return self.send(200, {"ok": True})
+        return self.send(404, {"error": "not found"})
 
     def manifest(self):
         return {
@@ -174,7 +209,28 @@ class TCPServer(socketserver.ThreadingMixIn, http.server.HTTPServer):
     daemon_threads = True
 
 
+def alerts_loop():
+    """Asks each app for its current alerts; new ones wake the subscribed phones."""
+    while True:
+        items = []
+        for app_id, app in APPS.items():
+            if hasattr(app, "alerts"):
+                try:
+                    for a in app.alerts():
+                        items.append({**a, "app": app_id, "id": f"{app_id}:{a['id']}"})
+                except Exception as e:
+                    sys.stderr.write(f"alerts {app_id}: {e!r}\n")
+        try:
+            PUSH.publish(items)
+        except Exception as e:
+            sys.stderr.write(f"push publish: {e!r}\n")
+        time.sleep(CFG["alerts_every_s"])
+
+
 def main():
+    if PUSH:
+        import threading
+        threading.Thread(target=alerts_loop, daemon=True).start()
     listen = CFG["listen"]
     if listen.startswith("unix:"):
         sock = listen[5:]

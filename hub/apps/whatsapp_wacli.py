@@ -152,6 +152,51 @@ class App:
                 out.append({"num": num, "name": names.get(num, ""), "count": r["n"], "last": self.when(r["last"])})
         return {"unknown": out}
 
+    # ---------- alertas (push) ----------
+    def alerts(self):
+        out, base = [], "/#/whatsapp_wacli"
+        for r in self.requests()["requests"]:
+            if r["state"] == "pending":
+                who = r.get("name") or r.get("to")
+                out.append({"id": f"req-{r['code']}", "title": f"Pedido de envio: {who}", "urgent": True,
+                            "body": (r.get("text") or "")[:300], "url": f"{base}/requests", "tag": f"wa-req-{r['code']}",
+                            "actions": [{"action": "approve", "title": "Aprovar",
+                                         "post": {"path": "whatsapp_wacli/requests/approve", "body": {"code": r["code"]}}},
+                                        {"action": "reject", "title": "Descartar",
+                                         "post": {"path": "whatsapp_wacli/requests/reject", "body": {"code": r["code"]}}}]})
+        now = time.time()
+        if now - getattr(self, "_sess_at", 0) > 60:
+            self._sess_at, self._sess = now, self.session_problem()
+        if self._sess:
+            out.append({"id": f"sess-{self._sess}", "title": "WhatsApp com problema", "body": self._sess,
+                        "url": base, "tag": "wa-sess", "urgent": True})
+        if self.state and os.path.exists(os.path.join(self.state, "PAUSA-NOVOS")):
+            out.append({"id": f"reach-{int(os.path.getmtime(os.path.join(self.state, 'PAUSA-NOVOS')))}",
+                        "title": "WhatsApp limitou contatos novos", "url": base, "tag": "wa-reach", "urgent": True,
+                        "body": "Prospecção pausada sozinha. Não repareie o número; libere com VOLTA quando passar."})
+        for u in self.unknown(days=1)["unknown"]:
+            out.append({"id": f"unk-{u['num']}-{u['last']}", "title": f"Mensagem de fora da lista: {u['name'] or u['num']}",
+                        "body": "O agente não responde. Toque para ver e liberar.", "url": f"{base}/chat/{u['num']}",
+                        "tag": f"wa-unk-{u['num']}"})
+        return out
+
+    def session_problem(self):
+        for u in self.units:
+            p = subprocess.run(["systemctl", "is-active", u], capture_output=True, text=True)
+            if p.stdout.strip() not in ("active", "activating"):
+                return f"serviço {u} parado"
+        try:
+            p = subprocess.run([self.wacli, "--store", self.store, "--read-only", "--json", "doctor"],
+                               capture_output=True, text=True, timeout=20)
+            d = json.loads(p.stdout or "{}").get("data") or {}
+        except (OSError, ValueError, subprocess.TimeoutExpired):
+            return ""
+        if d.get("session_revoked"):
+            return "o celular desvinculou o aparelho; precisa parear de novo"
+        if d.get("authenticated") is False:
+            return "sessão desconectada"
+        return ""
+
     # ---------- ações ----------
     def gate(self, args):
         env = {"PATH": "/usr/bin:/bin", "WA_CALLER": "hub", "LANG": "C.UTF-8"}
