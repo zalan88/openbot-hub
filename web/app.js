@@ -25,7 +25,7 @@ async function api(path, body) {
 const initials = (s) => (s || "?").trim().split(/\s+/).slice(0, 2).map((w) => w[0]).join("").toUpperCase();
 const fmtNum = (n) => (n && n.length >= 12 ? `+${n.slice(0, 2)} ${n.slice(2, 4)} ${n.slice(4, -4)}-${n.slice(-4)}` : n);
 const pill = (txt, kind = "") => h("span", { class: "pill " + kind }, txt);
-const ICONS = { chat: "💬", home: "🏠", chart: "📈" };
+const ICONS = { chat: "💬", home: "🏠", chart: "📈", book: "🌙" };
 
 function setTop(t, canBack) { title.textContent = t; back.hidden = !canBack; }
 function setTabs(items, active) {
@@ -78,11 +78,63 @@ async function enablePush() {
   toast("Notificações ligadas");
 }
 
+// ---------- Histórias ----------
+const ST = "stories";
+const fmtDur = (s) => `${Math.floor((s || 0) / 60)}:${String((s || 0) % 60).padStart(2, "0")}`;
+async function stList() {
+  setTop("Histórias", true); setTabs([], ""); loading();
+  try {
+    const { stories } = await api(`${ST}/list`);
+    view.replaceChildren(h("div", { class: "card" }, h("h2", {}, "Para dormir"), h("div", { class: "list" }, stories.map((x) =>
+      h("div", { class: "item", onclick: () => (location.hash = `#/${ST}/${x.id}`) },
+        h("div", { class: "avatar" }, "🌙"),
+        h("div", { class: "main" }, h("div", { class: "name" }, x.titulo), h("div", { class: "sub" }, x.licao)),
+        h("div", { class: "meta" }, fmtDur(x.duracao_s)))))));
+  } catch (e) { fail(e); }
+}
+async function stOne(id) {
+  setTop("História", true); setTabs([], ""); loading();
+  try {
+    const s = await api(`${ST}/story?id=${id}`);
+    const app = HUB.apps.find((a) => a.id === ST) || {};
+    setTop(s.titulo, true);
+    view.replaceChildren(
+      h("div", { class: "card" }, h("h2", {}, s.licao),
+        h("audio", { controls: true, preload: "none", src: `/api/${ST}/audio?id=${s.id}`, style: "width:100%" }),
+        h("div", { class: "btns" }, (app.players || []).map(([eid, label]) =>
+          h("button", { class: "btn", onclick: async () => { try { await api(`${ST}/play`, { id: s.id, player: eid }); toast(`Tocando: ${label}`); } catch (e) { toast(e.message); } } }, `▶ ${label}`)))),
+      h("div", { class: "card story" }, s.texto));
+  } catch (e) { fail(e); }
+}
+
 // ---------- Casa ----------
 const HA = "home_assistant";
 let camTimer = null;
+const haTabs = (active) => setTabs([[`#/${HA}`, "📷", "Câmeras"], [`#/${HA}/eventos`, "🕒", "Hoje"], [`#/${HA}/auto`, "⚙️", "Automações"]], active);
+async function haEvents() {
+  setTop("O que aconteceu", true); haTabs(`#/${HA}/eventos`); loading();
+  try {
+    const { events } = await api(`${HA}/events?hours=24`);
+    const icon = { Pessoa: "🧍", Animal: "🐕", "Choro de bebê": "👶", Conversa: "🗣️", Latido: "🐶", Movimento: "↔️", Veículo: "🚗", Carro: "🚗", Pacote: "📦", Rosto: "🙂" };
+    const byDay = {};
+    for (const e of events) { const d = new Date(e.ts); const k = d.toLocaleDateString("pt-BR", { weekday: "long", day: "2-digit", month: "2-digit" }); (byDay[k] = byDay[k] || []).push(e); }
+    view.replaceChildren(...(events.length ? Object.entries(byDay).map(([day, list]) => h("div", { class: "card" }, h("h2", {}, day),
+      h("div", { class: "list" }, list.map((e) => h("div", { class: "item" }, h("div", { class: "avatar" }, icon[e.label] || "•"),
+        h("div", { class: "main" }, h("div", { class: "name" }, e.label), h("div", { class: "sub" }, e.camera)),
+        h("div", { class: "meta" }, new Date(e.ts).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" }))))))) : [h("p", { class: "empty" }, "Nada detectado nas últimas 24 h.")]));
+  } catch (e) { fail(e); }
+}
+async function haAutos() {
+  setTop("Automações", true); haTabs(`#/${HA}/auto`); loading();
+  try {
+    const { automations } = await api(`${HA}/automations`);
+    view.replaceChildren(h("div", { class: "card" }, h("h2", {}, "Prontas para usar. Ligue as que quiser."),
+      ...automations.map((a) => h("div", { class: "row" }, h("span", {}, a.name, a.last ? h("small", { style: "display:block;color:var(--muted)" }, "última vez: " + new Date(a.last).toLocaleString("pt-BR")) : null),
+        h("button", { class: "btn" + (a.on ? " primary" : ""), onclick: async () => { try { await api(`${HA}/automations/toggle`, { entity: a.entity, on: !a.on }); toast(a.on ? "Desligada" : "Ligada"); route(); } catch (e) { toast(e.message); } } }, a.on ? "Ligada" : "Desligada")))));
+  } catch (e) { fail(e); }
+}
 async function haHome() {
-  setTop("Casa", true); setTabs([], ""); loading();
+  setTop("Casa", true); haTabs(`#/${HA}`); loading();
   try {
     const s = await api(`${HA}/status`);
     if (!s.online) return view.replaceChildren(h("div", { class: "card" }, h("h2", {}, "Home Assistant"), pill("fora do ar", "bad"), h("p", { class: "empty" }, s.error || "")));
@@ -252,7 +304,8 @@ function route() {
   const qs = new URLSearchParams(query || "");
   if (!(p[0] === HA && p[1] === "cam")) clearInterval(camTimer);
   if (!p.length) return home();
-  if (p[0] === HA) return p[1] === "cam" ? haCam(p[2]) : haHome();
+  if (p[0] === HA) return p[1] === "cam" ? haCam(p[2]) : p[1] === "eventos" ? haEvents() : p[1] === "auto" ? haAutos() : haHome();
+  if (p[0] === ST) return p[1] ? stOne(p[1]) : stList();
   if (p[0] === WA) {
     if (!p[1]) return waStatus();
     if (p[1] === "contacts") return waContacts();

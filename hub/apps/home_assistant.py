@@ -24,6 +24,8 @@ class App:
         self.info = {"id": "home_assistant", "name": cfg.get("title", "Casa"), "icon": "home",
                      "description": cfg.get("description", "Câmeras e estado da casa")}
         self._down_since = {}
+        self.auto_prefix = cfg.get("automation_id_prefix")  # automations shown with an on/off switch
+        self.timeline = cfg.get("timeline_entities", [])
 
     def req(self, path, raw=False, timeout=10):
         r = urllib.request.Request(self.url + path, headers={"Authorization": f"Bearer {self.token}"})
@@ -61,6 +63,56 @@ class App:
                 "entities": len(states), "unavailable": sum(off.values()),
                 "unavailable_by_domain": sorted(off.items(), key=lambda kv: -kv[1])[:8],
                 "cameras": self.cameras(states)}
+
+    def post(self, path, body):
+        r = urllib.request.Request(self.url + path, data=json.dumps(body).encode(), method="POST",
+                                   headers={"Authorization": f"Bearer {self.token}", "Content-Type": "application/json"})
+        with urllib.request.urlopen(r, timeout=15) as resp:
+            return resp.status
+
+    def automations(self):
+        if not self.auto_prefix:
+            return {"automations": []}
+        out = []
+        for s in self.states():
+            a = s["attributes"]
+            if s["entity_id"].startswith("automation.") and str(a.get("id", "")).startswith(self.auto_prefix):
+                out.append({"entity": s["entity_id"], "name": a.get("friendly_name", "").replace("[Dev] ", ""),
+                            "on": s["state"] == "on", "last": a.get("last_triggered")})
+        return {"automations": sorted(out, key=lambda x: x["name"])}
+
+    def events(self, hours=24):
+        """Detections from Protect event entities (person, animal, sounds...) in the last hours."""
+        if not self.timeline:
+            return {"events": []}
+        start = time.strftime("%Y-%m-%dT%H:%M:%S%z", time.localtime(time.time() - hours * 3600))
+        q = urllib.parse.urlencode({"filter_entity_id": ",".join(self.timeline), "no_attributes": "false"})
+        hist = self.req(f"/api/history/period/{urllib.parse.quote(start)}?{q}", timeout=20)
+        names = {"person": "Pessoa", "animal": "Animal", "pet": "Animal", "vehicle": "Veículo", "car": "Carro",
+                 "package": "Pacote", "face": "Rosto", "license_plate": "Placa", "baby_cry": "Choro de bebê",
+                 "speaking": "Conversa", "bark": "Latido", "smoke": "Alarme de fumaça", "co": "Alarme de CO",
+                 "glass_break": "Vidro quebrando", "siren": "Sirene", "car_alarm": "Alarme de carro",
+                 "car_horn": "Buzina", "motion": "Movimento"}
+        out = []
+        suffix = {"_person_detected": "person", "_animal_detected": "animal", "_vehicle_detected": "vehicle",
+                  "_baby_cry_detected": "baby_cry", "_speaking_detected": "speaking", "_motion": "motion"}
+        drop = ("smart", "sound", "motion", "detection", "detected", "person", "animal", "vehicle", "baby", "cry",
+                "speaking")
+        for series in hist:
+            for st in series:
+                eid, attrs = st["entity_id"], st.get("attributes", {})
+                cam = next((v for k, v in self.cfg.get("camera_labels", {}).items() if k in eid), None) or \
+                    " ".join(w for w in attrs.get("friendly_name", eid).split(" ") if w.lower() not in drop)
+                if eid.startswith("event."):
+                    et = attrs.get("event_type")
+                    if not et or st["state"] in OFF:
+                        continue
+                    out.append({"ts": st["state"], "camera": cam, "kind": et, "label": names.get(et, et)})
+                elif st["state"] == "on":
+                    et = next((v for k, v in suffix.items() if eid.endswith(k)), "motion")
+                    out.append({"ts": st["last_changed"], "camera": cam, "kind": et, "label": names.get(et, et)})
+        out.sort(key=lambda e: e["ts"], reverse=True)
+        return {"events": out[:200]}
 
     def snapshot(self, entity):
         if not entity.startswith("camera.") or (self.only and entity not in self.only):
@@ -100,8 +152,22 @@ class App:
         return out
 
     def handle(self, method, path, q, body):
+        if method == "POST" and path == "automations/toggle":
+            eid = (body or {}).get("entity", "")
+            if eid not in [a["entity"] for a in self.automations()["automations"]]:
+                return 400, {"error": "automação desconhecida"}
+            svc = "turn_on" if (body or {}).get("on") else "turn_off"
+            try:
+                self.post(f"/api/services/automation/{svc}", {"entity_id": eid})
+            except OSError as e:
+                return 502, {"error": str(e)[:200]}
+            return 200, {"ok": True}
         if method != "GET":
             return 404, {"error": "not found"}
+        if path == "automations":
+            return 200, self.automations()
+        if path == "events":
+            return 200, self.events(int(q.get("hours", 24)))
         if path == "status":
             return 200, self.status()
         if path == "snapshot":

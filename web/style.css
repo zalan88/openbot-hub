@@ -62,3 +62,4 @@ input, select { width: 100%; background: var(--card2); color: var(--fg); border:
 .cam span { position: absolute; left: 6px; bottom: 6px; font-size: 12px; background: rgba(0,0,0,.55); padding: 2px 6px; border-radius: 6px; }
 .cam.off { opacity: .5; } .cam-off { display: grid; place-items: center; height: 100%; color: var(--muted); font-size: 13px; }
 .cam-live { width: 100%; border-radius: 10px; display: block; background: var(--card2); min-height: 180px; }
+.story { white-space: pre-wrap; line-height: 1.6; font-size: 17px; }

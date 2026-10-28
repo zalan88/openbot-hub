@@ -10,6 +10,9 @@ Status: early. It runs one real server today.
 | --- | --- |
 | `whatsapp_wacli` | For a WhatsApp number linked with [wacli](https://github.com/openclaw/wacli): connection status, the agent's allowlist and blocklist, each contact's latest messages (marked contact, agent or you), send requests waiting for approval, and people who wrote but are not on the list. |
 | `home_assistant` | Camera snapshots (grid, and a near-live view that refreshes every 1.5 s) and the state of a [Home Assistant](https://www.home-assistant.io) server: version, entities, and what is unavailable. Config: `url`, `token_file` (a long-lived access token), optional `cameras`, `hide_cameras`, `alert_cameras`. |
+| `stories` | A small library of bedtime stories (text + audio) that plays in the browser or on a speaker through Home Assistant (`media_player.play_media`). Audio can be made offline with [Piper](https://github.com/rhasspy/piper). Config: `library_dir`, `media_base_url`, `ha_url`, `ha_token_file`, `players`. |
+
+`home_assistant` also shows a 24 h timeline of camera detections (`timeline_entities`, `camera_labels`) and on/off switches for automations whose id starts with `automation_id_prefix`.
 
 ## Notifications
 
